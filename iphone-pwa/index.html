@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>Password Manager</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .screen { display: none; padding: 16px; max-width: 480px; margin: 0 auto; }
+    .screen.active { display: block; }
+    h1 { font-size: 1.5rem; margin: 24px 0 16px; }
+    input, button, select, textarea {
+      font-size: 16px; /* avoids iOS zoom on focus */
+      width: 100%;
+      padding: 12px;
+      margin: 8px 0;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #16213e;
+      color: #eee;
+    }
+    button {
+      background: #0f3460;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      width: auto;
+      min-width: 120px;
+    }
+    button.primary { background: #e94560; color: #fff; }
+    button:active { opacity: 0.9; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .row input { flex: 1; min-width: 0; }
+    .entry {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 8px 0;
+      border: 1px solid #333;
+    }
+    .entry .site { font-weight: 600; color: #e94560; }
+    .entry .user, .entry .pw { font-size: 0.9rem; margin: 4px 0; word-break: break-all; }
+    .entry .copy-btn {
+      margin-top: 8px;
+      padding: 8px 12px;
+      font-size: 14px;
+      width: 100%;
+    }
+    .add-form { margin: 16px 0; }
+    .msg { color: #8f8; margin: 8px 0; font-size: 14px; }
+    .lock-btn { margin-top: 24px; background: #333; }
+    #copyFeedback { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #0f3460; padding: 12px 24px; border-radius: 8px; display: none; z-index: 10; }
+  </style>
+</head>
+<body>
+  <div id="loginScreen" class="screen active">
+    <h1>Password Manager</h1>
+    <p>Enter your master password to unlock.</p>
+    <input type="password" id="masterPw" placeholder="Master password" autocomplete="off">
+    <button type="button" class="primary" id="unlockBtn">Unlock</button>
+  </div>
+
+  <div id="mainScreen" class="screen">
+    <h1>Your entries</h1>
+    <button type="button" id="addEntryBtn">+ Add entry</button>
+    <div id="entryList"></div>
+    <div class="row">
+      <button type="button" id="exportForDesktopBtn">Export for desktop</button>
+      <button type="button" id="importFromDesktopBtn">Import from desktop</button>
+    </div>
+    <button type="button" class="lock-btn" id="lockBtn">Lock</button>
+  </div>
+
+  <div id="exportScreen" class="screen">
+    <h1>Export for desktop</h1>
+    <p>Use the same transfer password on Windows when importing.</p>
+    <input type="password" id="exportTransferPw" placeholder="Transfer password" autocomplete="off">
+    <button type="button" class="primary" id="doExportBtn">Create export</button>
+    <div id="exportBlobBox" style="display:none; margin-top:12px;">
+      <label>Copy this entire text and paste it in Windows (Import from phone):</label>
+      <textarea id="exportBlob" readonly rows="6" style="width:100%; font-size:12px; margin:8px 0;"></textarea>
+      <button type="button" id="copyExportBlobBtn">Copy to clipboard</button>
+    </div>
+    <button type="button" id="backFromExport" style="margin-top:12px;">← Back</button>
+  </div>
+
+  <div id="importScreen" class="screen">
+    <h1>Import from desktop</h1>
+    <p>Paste the text you got from Windows (Export for phone), then enter the same transfer password.</p>
+    <textarea id="importBlob" placeholder="Paste export text here" rows="5" style="width:100%; font-size:12px;"></textarea>
+    <input type="password" id="importTransferPw" placeholder="Transfer password" autocomplete="off">
+    <button type="button" class="primary" id="doImportBtn">Import</button>
+    <button type="button" id="backFromImport" style="margin-top:8px;">← Back</button>
+  </div>
+
+  <div id="addScreen" class="screen">
+    <h1>Add entry</h1>
+    <div class="add-form">
+      <input type="text" id="addSite" placeholder="Site (e.g. gmail.com)" autocapitalize="none" autocomplete="off">
+      <input type="text" id="addUser" placeholder="Username" autocomplete="off">
+      <input type="password" id="addPw" placeholder="Password (leave blank to generate)" autocomplete="off">
+      <div class="row">
+        <button type="button" id="generatePwBtn">Generate password</button>
+        <button type="button" class="primary" id="saveEntryBtn">Save</button>
+      </div>
+    </div>
+    <button type="button" id="backFromAdd">← Back</button>
+  </div>
+
+  <div id="copyFeedback">Copied to clipboard</div>
+
+  <script>
+    const ITERATIONS = 390000;
+    const VAULT_KEY = 'pm_vault';
+    const SALT_KEY = 'pm_salt';
+
+    function getSalt() {
+      let salt = localStorage.getItem(SALT_KEY);
+      if (!salt) {
+        const arr = new Uint8Array(16);
+        crypto.getRandomValues(arr);
+        salt = b64encode(arr);
+        localStorage.setItem(SALT_KEY, salt);
+      }
+      return salt;
+    }
+
+    function b64encode(buf) {
+      const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function b64decode(str) {
+      str = str.replace(/-/g, '+').replace(/_/g, '/');
+      const binary = atob(str);
+      const arr = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+      return arr;
+    }
+
+    async function deriveKey(password, salt) {
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits({
+        name: 'PBKDF2',
+        salt: b64decode(salt),
+        iterations: ITERATIONS,
+        hash: 'SHA-256'
+      }, keyMaterial, 256);
+      return crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    }
+
+    async function encryptVault(obj, key) {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const enc = new TextEncoder();
+      const ct = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        enc.encode(JSON.stringify(obj))
+      );
+      const combined = new Uint8Array(iv.length + ct.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(ct), iv.length);
+      return b64encode(combined);
+    }
+
+    async function decryptVault(b64, key) {
+      const combined = b64decode(b64);
+      const iv = combined.slice(0, 12);
+      const ct = combined.slice(12);
+      const dec = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        ct
+      );
+      return JSON.parse(new TextDecoder().decode(dec));
+    }
+
+    // Transfer format (same as Windows): base64(salt_16 || iv_12 || aes_gcm_ciphertext)
+    async function exportForTransfer(vaultObj, transferPassword) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const key = await deriveKey(transferPassword, b64encode(salt));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const enc = new TextEncoder();
+      const ct = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        enc.encode(JSON.stringify(vaultObj))
+      );
+      const combined = new Uint8Array(16 + 12 + ct.byteLength);
+      combined.set(salt);
+      combined.set(iv, 16);
+      combined.set(new Uint8Array(ct), 28);
+      return b64encode(combined);
+    }
+
+    async function importFromTransfer(blobB64, transferPassword) {
+      let padded = blobB64.replace(/\s/g, '');
+      const pad = (4 - padded.length % 4) % 4;
+      if (pad) padded += '===='.slice(0, pad);
+      const blob = b64decode(padded);
+      const salt = blob.slice(0, 16);
+      const iv = blob.slice(16, 28);
+      const ct = blob.slice(28);
+      const key = await deriveKey(transferPassword, b64encode(salt));
+      const dec = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        ct
+      );
+      return JSON.parse(new TextDecoder().decode(dec));
+    }
+
+    function randomPassword(len = 12) {
+      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
+      const arr = new Uint8Array(len);
+      crypto.getRandomValues(arr);
+      return Array.from(arr, i => chars[i % chars.length]).join('');
+    }
+
+    function showScreen(id) {
+      document.querySelectorAll('.screen').forEach(s => { s.classList.remove('active'); });
+      document.getElementById(id).classList.add('active');
+    }
+
+    function showCopyFeedback() {
+      const el = document.getElementById('copyFeedback');
+      el.style.display = 'block';
+      setTimeout(() => { el.style.display = 'none'; }, 1500);
+    }
+
+    let state = { key: null, vault: {} };
+
+    async function unlock() {
+      const pw = document.getElementById('masterPw').value;
+      if (!pw) return;
+      const salt = getSalt();
+      try {
+        state.key = await deriveKey(pw, salt);
+        const stored = localStorage.getItem(VAULT_KEY);
+        state.vault = stored ? await decryptVault(stored, state.key) : {};
+      } catch (e) {
+        alert('Wrong password or corrupted vault.');
+        return;
+      }
+      document.getElementById('masterPw').value = '';
+      renderList();
+      showScreen('mainScreen');
+    }
+
+    async function saveVault() {
+      const cipher = await encryptVault(state.vault, state.key);
+      localStorage.setItem(VAULT_KEY, cipher);
+    }
+
+    function renderList() {
+      const list = document.getElementById('entryList');
+      const sites = Object.keys(state.vault).sort();
+      list.innerHTML = sites.length === 0
+        ? '<p class="msg">No entries yet. Tap Add entry.</p>'
+        : sites.map(site => {
+            const e = state.vault[site];
+            return `<div class="entry" data-site="${site.replace(/"/g, '&quot;')}">
+              <div class="site">${escapeHtml(site)}</div>
+              <div class="user">${escapeHtml(e.username)}</div>
+              <div class="pw">${escapeHtml(e.password)}</div>
+              <button type="button" class="copy-btn" data-copy="${escapeHtml(e.password)}">Copy password</button>
+            </div>`;
+          }).join('');
+      list.querySelectorAll('[data-copy]').forEach(btn => {
+        btn.onclick = () => {
+          const pw = btn.getAttribute('data-copy');
+          navigator.clipboard.writeText(pw).then(() => showCopyFeedback()).catch(() => alert('Copy failed'));
+        };
+      });
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function addEntry() {
+      document.getElementById('addSite').value = '';
+      document.getElementById('addUser').value = '';
+      document.getElementById('addPw').value = '';
+      showScreen('addScreen');
+    }
+
+    async function saveEntry() {
+      const site = document.getElementById('addSite').value.trim().toLowerCase();
+      const user = document.getElementById('addUser').value.trim();
+      let pw = document.getElementById('addPw').value;
+      if (!site) { alert('Enter a site.'); return; }
+      if (!pw) pw = randomPassword();
+      state.vault[site] = { username: user, password: pw };
+      await saveVault();
+      renderList();
+      showScreen('mainScreen');
+    }
+
+    function lock() {
+      state.key = null;
+      state.vault = {};
+      showScreen('loginScreen');
+    }
+
+    document.getElementById('unlockBtn').onclick = unlock;
+    document.getElementById('masterPw').onkeydown = e => { if (e.key === 'Enter') unlock(); };
+    document.getElementById('addEntryBtn').onclick = addEntry;
+    document.getElementById('backFromAdd').onclick = () => showScreen('mainScreen');
+    document.getElementById('lockBtn').onclick = lock;
+    document.getElementById('generatePwBtn').onclick = () => {
+      document.getElementById('addPw').value = randomPassword();
+    };
+    document.getElementById('saveEntryBtn').onclick = saveEntry;
+
+    document.getElementById('exportForDesktopBtn').onclick = () => {
+      document.getElementById('exportTransferPw').value = '';
+      document.getElementById('exportBlobBox').style.display = 'none';
+      showScreen('exportScreen');
+    };
+    document.getElementById('backFromExport').onclick = () => showScreen('mainScreen');
+    document.getElementById('doExportBtn').onclick = async () => {
+      const pw = document.getElementById('exportTransferPw').value;
+      if (!pw) { alert('Enter a transfer password.'); return; }
+      try {
+        const blob = await exportForTransfer(state.vault, pw);
+        document.getElementById('exportBlob').value = blob;
+        document.getElementById('exportBlobBox').style.display = 'block';
+      } catch (e) {
+        alert('Export failed.');
+      }
+    };
+    document.getElementById('copyExportBlobBtn').onclick = () => {
+      const t = document.getElementById('exportBlob');
+      t.select();
+      document.execCommand('copy');
+      showCopyFeedback();
+    };
+
+    document.getElementById('importFromDesktopBtn').onclick = () => {
+      document.getElementById('importBlob').value = '';
+      document.getElementById('importTransferPw').value = '';
+      showScreen('importScreen');
+    };
+    document.getElementById('backFromImport').onclick = () => showScreen('mainScreen');
+    document.getElementById('doImportBtn').onclick = async () => {
+      const blob = document.getElementById('importBlob').value.trim();
+      const pw = document.getElementById('importTransferPw').value;
+      if (!blob || !pw) { alert('Paste the export text and enter the transfer password.'); return; }
+      try {
+        const imported = await importFromTransfer(blob, pw);
+        Object.assign(state.vault, imported);
+        await saveVault();
+        renderList();
+        showScreen('mainScreen');
+        alert('Imported ' + Object.keys(imported).length + ' entry/entries.');
+      } catch (e) {
+        alert('Wrong transfer password or invalid text.');
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

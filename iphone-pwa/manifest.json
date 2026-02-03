@@ -1,0 +1,10 @@
+{
+  "name": "Password Manager",
+  "short_name": "Passwords",
+  "description": "Offline encrypted password manager",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait"
+}
